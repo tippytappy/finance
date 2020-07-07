@@ -27,3 +27,8 @@ prices %>%
   theme_light() + 
   labs(title = "Martin's Stocks", 
        subtitle = 'Close price with 50 (blue) and 200 (red) simple moving averages')
+
+# HIGHCHARTER
+prices %>% 
+  filter(symbol == 'MPNGF') %>% 
+  hchart('line', hcaes(date, close))
