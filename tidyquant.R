@@ -28,7 +28,16 @@ prices %>%
   labs(title = "Martin's Stocks", 
        subtitle = 'Close price with 50 (blue) and 200 (red) simple moving averages')
 
-# HIGHCHARTER
+# HIGHCHARTER  ################################################################
 prices %>% 
   filter(symbol == 'MPNGF') %>% 
   hchart('line', hcaes(date, close))
+
+highchart() %>% 
+  hc_add_series(data = prices %>% 
+                  filter(symbol == 'JD'),
+                'line', hcaes(date, close)) %>% 
+  hc_add_series(data = prices %>% 
+                  filter(symbol == 'JD'),
+                'line', hcaes(date, Ra_200))
+
