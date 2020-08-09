@@ -22,7 +22,6 @@ get_overview <- function(symbol) {
 # get multiple overviews
 company_overviews <- map(c('MSFT', 'AAPL'), ~ get_overview(.x)) %>% 
   bind_rows()
-get_overview('MSFT')
 
 
 # FUNDAMENTALS  ###############################################################
