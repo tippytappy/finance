@@ -118,11 +118,6 @@ sp500_signal_separation <-
 sp500_steadies <- 
   sp500_signal_separation %>% 
   left_join(sp500_last_signal, by = 'symbol') %>% 
-  filter(avg_days_between_signals > 350, last_signal == 'buy')
-
-sp500_steadies <- 
-  sp500_signal_separation %>% 
-  left_join(sp500_last_signal, by = 'symbol') %>% 
   filter(last_signal == 'buy') %>% 
   arrange(desc(avg_days_between_signals))
 
