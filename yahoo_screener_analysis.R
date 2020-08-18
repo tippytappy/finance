@@ -1,14 +1,37 @@
-# yahoo screener
-https://uk.finance.yahoo.com/screener/predefined/undervalued_growth_stocks
+# SET UP  #####################################################################
+library(rvest)
 
-yahoo_screener_symbols <- 
-  read_html('https://uk.finance.yahoo.com/screener/predefined/undervalued_growth_stocks?offset=25&count=250') %>% 
-  html_nodes('.simpTblRow') %>% 
-  html_nodes("a") %>% 
-  html_text()
+#  GET THE DATA  ##############################################################
+# yahoo's pre-defined screeners
+screeners <- c(
+  'aggressive_small_caps',
+  'conservative_foreign_funds',
+  'day_gainers',
+  'day_losers',
+  'growth_technology_stocks',  # 5
+  'high-yield_bond',
+  'portfolio_anchors',
+  'small_cap_gainers',
+  'solid_large_growth_funds',
+  'solid_midcap_growth_funds',  # 10
+  'top_mutual_funds',
+  'undervalued_growth_stocks',
+  'undervalued_large_caps')
 
-yahoo_screener_data <- tq_get(yahoo_screener_symbols[1:5]) 
-yahoo_screener_data %>% 
-  ggplot(aes(date, close)) + 
-  geom_barchart(aes(high = high, low = low, open = open, close = close)) + 
-  facet_wrap(~ symbol, scales = 'free')
+
+get_screener_data <- function(screen_num = 12, num_records = 200, ...) {
+  screener_url <- paste0('https://uk.finance.yahoo.com/screener/predefined/',
+                            screeners[screen_num],
+                         '?offset=0&count=',
+                         num_records)
+  cat(paste0('getting symbols from \n', screener_url))
+  screener_symbols <- 
+    read_html(screener_url) %>% 
+    rvest::html_nodes('.simpTblRow') %>% 
+    rvest::html_nodes("a") %>% 
+    rvest::html_text() %>%
+    tq_get()
+}
+
+# example: get 30 solid mid-cap growth funds
+screener_data <- get_screener_data(10, 30)
