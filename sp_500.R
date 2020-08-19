@@ -1,4 +1,4 @@
-# S&P 500
+# S&P 500  ####################################################################
 # this script 
 # - pulls the symbols for the S&P 500
 # - pulls ohlc data for them since 2006
@@ -9,8 +9,24 @@
 library(pacman)
 p_load(rvest, tidyquant, dplyr, ggplot2, tidyr, tibbletime)
 
+# set the alphavantage api key
+av_key <- av_api_key(Sys.getenv('av_key'))
+
 # SIMPLE MOVING AVERAGES CHART  ###############################################
 sma_chart <- function(x) {
+  x %>% 
+  ggplot(aes(date, close)) +
+    geom_line(colour = 'grey50', alpha = 0.5) + 
+    geom_ma(n = 50, colour = 'darkgreen', lwd = 1) + 
+    geom_ma(n = 200, colour = 'darkorange', lwd = 1) +
+    facet_wrap(~ symbol, scales = 'free') + 
+    theme_light() + 
+    theme(panel.grid.minor = element_blank(),
+          strip.text = element_text(colour = 'black'))
+}
+
+# SIGNALS CHART  ##############################################################
+signals_chart <- function(x) {
   ggplot() +
     geom_line(data = x, aes(date, close), colour = 'grey50', 
               alpha = 0.5) + 
@@ -36,7 +52,7 @@ sp500 <- sp500[[1]] %>%
          sector = `GICS Sector`, industry = 'GICS Sub Industry')
 
 # get the ohlc data
-sp500_ohlc <- tq_get(sp500$symbol, from = '2006-01-01', complete_cases = TRUE)
+sp500_data <- tq_get(sp500$symbol, from = '2006-01-01', complete_cases = TRUE)
 sp500_data <- sp500_ohlc %>% 
   left_join(sp500, by = 'symbol')
 
@@ -45,20 +61,17 @@ sma_50_fun <- rollify(mean, window = 50)
 sma_200_fun <- rollify(mean, window = 200)
 
 # look for records with less than 200 records
-sp500_data %>% 
+sp500_under_200 <- 
+  sp500_data %>% 
   count(symbol) %>% 
   filter(n < 200)
-
-# 1 CARR     100
-# 2 OTIS     100
-# 3 VIAC     171
 
 # we will exclude these from the analyses as they don't have enough data 
 # for the rolling 200 day average
 
 # now we add some columns which we'll use later to analyse and compare companies
 sp500_data <- sp500_data %>% 
-  filter(!symbol %in% c('CARR', 'OTIS', 'VIAC')) %>% 
+  filter(!symbol %in% sp500_under_200$symbol) %>% 
   group_by(symbol) %>% 
   mutate(day_diff = (close - lag(close, 1)) / lag(close, 1), 
          day_result = ifelse(close >= lag(close, 1), 'up', 'down'),
@@ -68,79 +81,6 @@ sp500_data <- sp500_data %>%
          signal = ifelse(sma_50 >= sma_200, 'buy', 'sell')) %>% 
   mutate(signal = ifelse(signal == lag(signal, 1), NA, signal)) %>% 
   ungroup()
-
-# 
-
-sp500_yearly_gains <- 
-  sp500_data %>% 
-  filter(!is.na(day_result), symbol == 'A') %>% 
-  group_by(symbol, sector, year = lubridate::year(date), day_result) %>% 
-  summarise(avg_diff = mean(day_diff)) %>% 
-  spread(day_result, avg_diff)
-
-sp500_day_results <- 
-  sp500_data %>% 
-  filter(!is.na(day_result)) %>% 
-  count(symbol, year = lubridate::year(date), day_result) %>% 
-  spread(day_result, n) %>%
-  mutate(gain_pcnt = up / (up + down))
-
-# I'm looking for companies with a low number of signals
-# i.e. companies whose charts aren't too volatile.
-# Let's find the total number of signals for each company
-sp500_signal_count <- 
-  sp500_data %>% 
-  filter(!is.na(signal)) %>% 
-  count(symbol, sector) %>% 
-  rename(total_signals = n) %>% 
-  ungroup()
-
-# and let's determine whether the last signal was a buy or sell
-sp500_last_signal <- 
-  sp500_data %>% 
-  select(symbol, date, signal) %>% 
-  filter(!is.na(signal)) %>% 
-  arrange(desc(date)) %>% 
-  group_by(symbol) %>% 
-  slice_min(1) %>% 
-  ungroup() %>% 
-  rename(last_signal = signal)
-
-# now we put the two things together to look for 
-# steady charts where the most recent signal was buy
-
-sp500_steadies <- 
-  sp500_signal_count %>% 
-  left_join(sp500_last_signal, by = 'symbol') %>% 
-  filter(total_signals < 10, last_signal == 'buy')
-
-# now let's plot those
-sp500_data %>% 
-  filter(symbol %in% sp500_steadies$symbol) %>% 
-  sma_chart()
-
-# actually all I've done is choose young stocks with not much history
-# let's work out the average time between signals
-sp500_signal_separation <- 
-  sp500_data %>% 
-  select(symbol, date, signal) %>% 
-  filter(!is.na(signal)) %>% 
-  group_by(symbol) %>% 
-  mutate(days_between_signal = difftime(date, lag(date, 1), units = 'days')) %>% 
-  group_by(symbol) %>% 
-  summarise(avg_days_between_signals = mean(days_between_signal, na.rm = TRUE)) %>% 
-  ungroup()
-
-sp500_steadies <- 
-  sp500_signal_separation %>% 
-  left_join(sp500_last_signal, by = 'symbol') %>% 
-  filter(last_signal == 'buy') %>% 
-  arrange(desc(avg_days_between_signals))
-
-# plot the 20 companies with the highest numbers of days between signals
-sp500_data %>% 
-  filter(symbol %in% sp500_steadies$symbol[1:20]) %>% 
-  sma_chart()
 
 # SECTOR ANALYSIS  ############################################################
 # let's start with a chart of the average close price by sector
@@ -264,28 +204,157 @@ liked_companies <- c('MSFT', 'ADBE', 'TYL', 'HD', 'AMZN',
 # let's plot the simple moving averages charts for the companies we liked
 sp500_data %>% 
   filter(symbol %in% liked_companies) %>% 
-  ggplot() +
-  geom_line(aes(date, close), colour = 'grey50', 
-            alpha = 0.5) + 
-  geom_line(aes(date, sma_50), colour = 'darkgreen', lwd = 1) + 
-  geom_line(aes(date, sma_200), colour = 'darkorange', lwd = 1) +
-  geom_point(aes(date, sma_50, colour = signal), size = 2) + 
-  scale_color_manual(values=c("blue", "red")) + 
-  facet_wrap(~ symbol, scales = 'free') + 
-  theme_light() + 
-  theme(panel.grid.minor = element_blank(),
-        strip.text = element_text(colour = 'black'))
+  sma_chart()
+  
+yearly_trend_chart <- function(x) {
+  x %>% 
+  ggplot(aes(date, year_diff)) +
+    geom_line(colour = 'grey80') + 
+    geom_smooth(se = FALSE, method = 'lm', colour = 'grey32', lwd = 1.2) +
+    geom_hline(yintercept = 0, colour = 'red', lwd = 0.5) + 
+    scale_y_continuous(labels = scales::percent) +
+    facet_wrap(~ symbol, scales = 'free') + 
+    theme_light() + 
+    theme(panel.grid.minor = element_blank(),
+          strip.text = element_text(colour = 'black')) + 
+    labs(x = '', y = '1 year growth')
+}
 
+
+# STEADIES  ###################################################################
+# I'm looking for companies with a low number of signals
+# i.e. companies whose charts aren't too volatile.
+# Let's find the total number of signals for each company
+sp500_signal_count <- 
+  sp500_data %>% 
+  filter(!is.na(signal)) %>% 
+  count(symbol, sector) %>% 
+  rename(total_signals = n) %>% 
+  ungroup()
+
+# and let's determine whether the last signal was a buy or sell
+sp500_last_signal <- 
+  sp500_data %>% 
+  select(symbol, date, signal) %>% 
+  filter(!is.na(signal)) %>% 
+  arrange(desc(date)) %>% 
+  group_by(symbol) %>% 
+  slice_min(1) %>% 
+  ungroup() %>% 
+  rename(last_signal = signal)
+
+# now we put the two things together to look for 
+# steady charts where the most recent signal was buy
+
+sp500_steadies <- 
+  sp500_signal_count %>% 
+  left_join(sp500_last_signal, by = 'symbol') %>% 
+  filter(total_signals < 10, last_signal == 'buy')
+
+# now let's plot those
+sp500_data %>% 
+  filter(symbol %in% sp500_steadies$symbol) %>% 
+  sma_chart()
+
+# actually all I've done is choose young stocks with not much history
+# let's work out the average time between signals
+sp500_signal_separation <- 
+  sp500_data %>% 
+  select(symbol, date, signal) %>% 
+  filter(!is.na(signal)) %>% 
+  group_by(symbol) %>% 
+  mutate(days_between_signal = difftime(date, lag(date, 1), units = 'days')) %>% 
+  group_by(symbol) %>% 
+  summarise(avg_days_between_signals = mean(days_between_signal, na.rm = TRUE)) %>% 
+  ungroup()
+
+sp500_steadies <- 
+  sp500_signal_separation %>% 
+  left_join(sp500_last_signal, by = 'symbol') %>% 
+  filter(last_signal == 'buy') %>% 
+  arrange(desc(avg_days_between_signals))
+
+# plot the 20 companies with the highest numbers of days between signals
+sp500_data %>% 
+  filter(symbol %in% sp500_steadies$symbol[1:20]) %>% 
+  sma_chart()
+
+# RISING YEARLY PERCENT DIFFERENCE  ###########################################
 # and let's look for companies whose percentage difference between
 # values a year apart is rising.
 # the idea here is to see the likelihood I'll be better off after a year
 sp500_data %>% 
   filter(symbol %in% liked_companies) %>% 
   ggplot(aes(date, year_diff)) +
-  geom_line(colour = 'grey50') + 
+  geom_line(colour = 'grey80') + 
   geom_smooth(se = FALSE, method = 'lm') +
   geom_hline(yintercept = 0, colour = 'red', lwd = 0.5) +
   facet_wrap(~ symbol, scales = 'free') + 
   theme_light() + 
   theme(panel.grid.minor = element_blank(),
         strip.text = element_text(colour = 'black'))
+
+# get the linear model coefficient for the year_diff column
+# this tells us whether the 1 year difference between close prices
+# is rising or falling
+library(tidyr)
+library(purrr)
+sp500_yearly_trends <- 
+  sp500_data %>% 
+  filter(!is.na(year_diff)) %>% 
+  select(symbol, date, year_diff) %>% 
+  nest(data = -symbol) %>% 
+  mutate(model = map(.x = data, ~ lm(formula = year_diff ~ date, data = .x)),
+         year_diff_coeff = map(.x = model, ~ coefficients(.x)[[2]]))
+
+# turn this into a self-contained function
+# takes a tidyquant data frame
+# returns a data frame of symbol and yearly gain lm coefficient
+yearly_gain_coeff <- function(x) {
+  df <- x %>% 
+    mutate(year_diff = (close - lag(close, 252) / lag(close, 252))) %>% 
+    filter(!is.na(year_diff)) %>% 
+    select(symbol, date, year_diff) %>% 
+    nest(data = -symbol) %>% 
+    mutate(model = map(data, ~ lm(formula = year_diff ~ date, data = .x)),
+           year_diff_coeff = map(model, ~ coefficients(.x)[[2]]))
+  data.frame(symbol = df$symbol, 
+             year_diff_coeff = unlist(df$year_diff_coeff))
+}
+
+yearly_gain_coeff(equity_screener_data)
+
+equity_screener_data %>% 
+  #filter(symbol == 'SE') %>% 
+  sma_chart()
+  
+
+sp500_data %>% 
+  filter(symbol %in% 
+           head(sp500_yearly_trends$symbol, 20)) %>% 
+  yearly_trend_chart()
+
+# let's add the sp500 date so we can filter this list
+# by industry or sector
+sp500_yearly_trends <- 
+  sp500_yearly_trends %>%
+  left_join(sp500, by = 'symbol')
+
+# some of the results look suspect, e.g. DOW; it has hardly any records
+# let's add the number of days for which each stock has data
+# so we can filter by the number of days as well
+
+sp500_yearly_trends <- 
+  sp500_yearly_trends %>%
+  left_join(sp500_data %>% 
+              group_by(symbol) %>% 
+              summarise(no_records = n()), by = 'symbol')
+
+# now we can look for rising stocks with at least 5 years' data
+sp500_yearly_trends %>% 
+  filter(year_diff_coeff * 252 > 0.03, no_records >= 252 * 5)
+
+sp500_yearly_trends %>% 
+  filter(no_records >= 252 * 5) %>% 
+  select(symbol, year_diff_coeff) %>% 
+  head(10)
