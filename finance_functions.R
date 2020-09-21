@@ -46,3 +46,19 @@ merge_multiple_xts <- function(symbols, col = 'close') {
 # from the xts objects in symbols
 # symbols   a character vector
 # col       a string matching the type of column required
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+coeffs <- function(x, id = 'symbol', xcol = 'date', ycol = 'return') {
+  df <- x %>% 
+    tidyr::nest(data = -id) %>% 
+    dplyr::mutate(model = purrr::map(data, ~ lm(.x[[ycol]] ~ .x[[xcol]])),
+                  coeff = purrr::map(model, ~ coefficients(.x)[[2]]))
+  df[1] %>% 
+    bind_cols(coeff = unlist(df[4]))
+}
+
+# takes a data frame
+# returns a data frame of 
+# - the id col, e.g. symbol
+# - the coefficient of the required column, e.g. 'close'
