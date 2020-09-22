@@ -1,9 +1,12 @@
 # SET UP  #####################################################################
 library(PerformanceAnalytics)
 library(PortfolioAnalytics)
+library(tseries)
 library(quantmod)
 library(ROI)
 library(dplyr)
+library(rvest)
+library(purrr)
 source('finance_functions.R')
 
 # DATA  #######################################################################
@@ -267,26 +270,15 @@ pf <- sp500 %>%
 # get the OHLC data
 getSymbols(pf, from = '2010-01-01')
 
-# create a function which can take a vector of XTS OHLC object names and
-# return an XTS object containing periodic returns for all companies.
-
-periodReturns <- function(symbols, period = 'monthly') {
-  len <- length(symbols)
-  li <- vector(mode = 'list', length = len)
-  for (i in 1:len) {
-    x <- eval(rlang::parse_expr(symbols[i]))
-    x <- periodReturn(x, period = period)
-    names(x) <- symbols[i]
-    li[[i]] <- x
-  }
-  Reduce(merge, li)
-}
-
 # use the new function to get the monthly returns of our test data
 # monthly is the default period
 pf_returns <- pf %>% 
-  periodReturns()
-pf_returns %>% head()
+  period_returns()
+
+pf_prices <- pf %>% 
+  merge_multiple_xts()
+
+pf_returns %>% autoplot.zoo()
 
 # plot the mean monthly return of the portfolio
 pf_returns %>% rowMeans() %>% xts(order.by = time(pf_returns)) %>% plot.zoo()
@@ -297,7 +289,7 @@ pf_returns %>% rowMeans() %>% xts(order.by = time(pf_returns)) %>% plot.zoo()
 # lowest portfolio variance for a target return. 
 # We can use portfolio.optim() function in the tseries package to find the weights.
 
-library(tseries)
+
 pf_optimised <- portfolio.optim(pf_returns)
 
 # returns a list with 4 elements:
@@ -368,7 +360,7 @@ pf_targets <- seq(from = 0.01,
                   to = 0.08, 
                   length.out = 50)
 
-library(purrr)
+
 pf_targets_results <- map(pf_targets, ~ portfolio.optim(pf_returns, pm = .x))
 
 test_l <- 20
@@ -379,13 +371,276 @@ for(i in 1:test_l) {
 
 
 # PORTFOLIO OPTIMISATION WITH PORTFOLIOANALYTICS  #############################
-library(PortfolioAnalytics)
+# define a portfolio object
+# add objectives
+# add constraints
+# select a solver
+# optimise
 
-pf_portspec <- portfolio.spec(assets = colnames(pf_returns))
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# PORTFOLIO OBJECT
+pf <- portfolio.spec(assets = colnames(pf_sample_data))
 
-pf_portspec <- pf_portspec %>% add.constraint(type = 'weight_sum',
-                                              min_sum = 1, max_sum = 1)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# OBJECTIVES
 
-pf_portspec <- pf_portspec %>% add.objective(type = 'return', name = 'mean')
+# portfolio return; maximise something
+# e.g. the mean return
+add.objective(type = 'return', name = 'mean')
 
-pf_portspec_opt <- optimize.portfolio(R = pf_returns, portfolio = pf_portspec, optimize_method = 'ROI')
+# portfolio risk; minimise a function
+# e.g. expected tail loss, confidence level 0.95
+# the function must match an R or custom function, e.g. PerformanceAnalytics
+add.objective(type = 'risk',
+              nname = 'ETL',  # the function
+              arguments = list(p = 0.95))
+
+# portfolio risk budget; minimise component contribution to overall risk
+# or specify upper and lower bounds on percentage risk contribution.
+# e.g. no asset can contribute more than 30% to total portfolio risk.
+add.objective(type = "risk_budget", 
+              name = "ETL",
+              arguments = list(p=0.95), 
+              max_prisk = 0.3)
+
+# weight concentration; minimise concentration
+add.objective(type = "weight_concentration",
+              name = "HHI", 
+              conc_aversion = 0.1)
+
+# can take into account groups
+add.objective(type="weight_concentration",
+              name = "HHI",
+              conc_aversion = c(0.03, 0.06),
+              conc_groups = list(c(1, 2),
+                                 c(3, 4)))
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# CONSTRAINTS
+
+# sum of weights: how much of the available cash should be allocated
+add.constraint(type = 'weight_sum', min_sum = 1, max_sum = 1)
+add.constraint(type = 'full_investment')
+
+# box: min and max permitted weights.#
+# default = long only (min = 0, max = 1)
+add.constraint(type = 'box', 
+               min = 0.05, max = 0.4) # same bounds for all assets 
+add.constraint(type = 'box', 
+               min = c(0.3, 0.4), max = c(0.5, 0.8))  # e.g. 2 assets
+
+add.constraint(type = 'long_only')  # explicitly set long only
+
+# group: min and max for groups of assets
+pspec <- add.constraint(type="group",
+                        groups=list(groupA = c(1, 2, 3),
+                                    groupB = 4),
+                        group_min = c(0.1, 0.15),
+                        group_max = c(0.85, 0.55))
+
+# diversification
+add.constraint(type="diversification", div_target=0.7)
+
+# target return
+add.constraint(type="return", return_target=0.007)
+
+# factor exposure
+# set upper and lower bounds on exposure to risk factors, 
+# e.g. beta for a 4 asset portfolio
+add.constraint(type="factor_exposure",
+               B=c(-0.08, 0.37, 0.79, 1.43),
+               lower=0.6, upper=0.9)
+
+# other types
+# position limit
+# turnover
+# transaction cost
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# SOLVERS
+
+# specified with the optimize_method argument in 
+# optimize.portfolio
+# optimize.portfolio.rebalancing
+
+# DEoptim
+# random portfolios; 3 options
+# - sample; for multiple constraint types
+# - simplex; good for full investment and min box constraints
+# - grid; only satisfies min and max box constraints
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# OPTIMISE
+
+# EXAMPLE: maximise mean return
+
+# sample data
+pf_sample_data <- edhec[, 1:4]
+assets <- names(pf_sample_data)
+
+# init the portfolio and add obs and cons
+pf <- portfolio.spec(assets = assets) %>% 
+  add.objective(type = 'return',
+                name = 'mean') %>% 
+  add.constraint(type = 'leverage',
+                 min_sum = 0.99, 
+                 max_sum = 1.01) %>% 
+  add.constraint(type = 'box',
+                 min = 0.05,
+                 max = 0.65)
+
+pf_max_return <- pf_sample_data %>% 
+  optimize.portfolio(portfolio = pf,
+                     optimize_method = 'ROI',
+                     trace = TRUE)
+
+plot(pf_max_return, risk.col="StdDev", return.col="mean",
+     main="Minimum Variance Optimization", chart.assets=TRUE,
+     xlim=c(0, 0.05), ylim=c(0,0.0085))
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# EXAMPLE: minimise variance
+
+# sample data
+pf_sample_data <- edhec[, 1:4]
+assets <- names(pf_sample_data)
+
+# init the portfolio and add obs and cons
+pf <- portfolio.spec(assets = assets) %>% 
+  add.objective(type = 'minimise',
+                name = 'var') %>% 
+  add.constraint(type = 'full_investment') %>% 
+  add.constraint(type = 'box',
+                 min = 0.05,
+                 max = 0.65)
+
+pf_min_variance <- pf_sample_data %>% 
+  optimize.portfolio(portfolio = pf,
+                     optimize_method = 'ROI',
+                     trace = TRUE)
+
+plot(pf_max_return, risk.col="StdDev", return.col="mean",
+     main="Minimum Variance Optimization", chart.assets=TRUE,
+     xlim=c(0, 0.05), ylim=c(0,0.0085))
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# EXAMPLE: minimise expected tail loss
+
+# sample data
+pf_sample_data <- edhec[, 1:4]
+assets <- names(pf_sample_data)
+
+# init the portfolio and add obs and cons
+pf <- portfolio.spec(assets = assets) %>% 
+  add.objective(type = 'minimise',
+                name = 'ETL') %>% 
+  add.constraint(type = 'full_investment') %>% 
+  add.constraint(type = 'box',
+                 min = 0.05,
+                 max = 0.65)
+
+pf_min_etl <- pf_sample_data %>% 
+  optimize.portfolio(portfolio = pf,
+                     optimize_method = 'ROI',
+                     trace = TRUE)
+
+plot(pf_max_return, risk.col="StdDev", return.col="mean",
+     main="Minimum Variance Optimization", chart.assets=TRUE,
+     xlim=c(0, 0.05), ylim=c(0,0.0085))
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# EXAMPLE: maximise mean return and minimise sd with random portfolios
+
+# sample data
+pf_sample_data <- edhec[, 1:4]
+assets <- names(pf_sample_data)
+
+# init the portfolio and add obs and cons
+pf <- portfolio.spec(assets = assets) %>% 
+  add.objective(type = 'return',
+                name = 'mean') %>% 
+  add.objective(type = 'risk',
+                name = 'var') %>% 
+  add.constraint(type = 'leverage',
+                 min_sum = 0.99, 
+                 max_sum = 1.01) %>% 
+  add.constraint(type = 'box',
+                 min = 0.05,
+                 max = 0.65)
+
+pf_max_return_multi <- pf_sample_data %>% 
+  optimize.portfolio(portfolio = pf,
+                     optimize_method = 'random',
+                     search_size = 2000,
+                     trace = TRUE)
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# EXAMPLE: maximise mean return and minimise sd with sample moments
+
+# sample data
+pf_sample_data <- edhec[, 1:4]
+assets <- names(pf_sample_data)
+
+# init the portfolio and add obs and cons
+pf <- portfolio.spec(assets = assets) %>% 
+  add.objective(type = 'return',
+                name = 'mean') %>% 
+  add.objective(type = 'risk',
+                name = 'var') %>% 
+  add.constraint(type = 'leverage',
+                 min_sum = 0.99, 
+                 max_sum = 1.01) %>% 
+  add.constraint(type = 'box',
+                 min = 0.05,
+                 max = 0.65)
+
+pf_max_return_multi <- pf_sample_data %>% 
+  optimize.portfolio(portfolio = pf,
+                     optimize_method = 'random',
+                     momentFUN = 'pf_moments')
+
+extractStats(pf_max_return) %>% head()
+plot(pf_max_return_multi, 
+     return.col="mean", 
+     risk.col = 'StdDev',
+     neighbors=25,
+     chart.assets = TRUE,
+     main="mean-ETL Optimization")
+
+chart.EfficientFrontier(pf_max_return_multi,
+                        match.col = "ES", n.portfolios = 25, xlim = NULL, ylim = NULL,
+                        cex.axis = 0.8, element.color = "darkgray", main = "Efficient Frontier",
+                        RAR.text = "SR", rf = 0, tangent.line = TRUE, cex.legend = 0.8,
+                        chart.assets = TRUE, labels.assets = TRUE, pch.assets = 21,
+                        cex.assets = 0.8)
+
+pf_max_return_rebal <- optimize.portfolio.rebalancing(R = pf_sample_data, 
+                                            portfolio = pf, 
+                                            optimize_method = "random", 
+                                            trace = TRUE, 
+                                            search_size = 1000, 
+                                            rebalance_on = "quarters", 
+                                            training_period = 60, 
+                                            rolling_window = 60)
+
+# PORTFOLIO METRICS AND VISUALS  ##############################################
+# rebalanced weights
+chart.Weights(pf_max_return_rebal)
+data.frame(i = index(extractWeights(pf_max_return_rebal)), 
+           extractWeights(pf_max_return_rebal)) %>%
+  tidyr::gather(asset, weight, -i) %>% 
+  ggplot(aes(i, weight, colour = asset)) +
+  geom_line()
+
+# portfolio summary
+Return.portfolio(pf_returns) %>% 
+  charts.PerformanceSummary()
+
+# SAMPLE MOMENTS  #############################################################
+pf_moments <- set.portfolio.moments(R = pf_sample_data, portfolio = pf)
+
+
+# RANDOM PORTFOLIOS  ##########################################################
+# Generate random portfolios for use in the optimization.
+rp <- random_portfolios(pf_portspec, 5000)
+
