@@ -86,3 +86,35 @@ get_coeffs <- function(x, id = 'symbol', xcol = 'date', ycol = 'return') {
 # returns a data frame of 
 # - the id col, e.g. symbol
 # - the coefficient of the required column, e.g. 'close'
+
+# DATA FRAME TO XTS  ##########################################################
+# convert data frame to xts
+closes_tq <- ohlc %>% 
+  filter(date > as.POSIXct('2019-01-01')) %>% 
+  #filter(ticker == 'AAPL') %>% 
+  select(date, symbol, close) %>% 
+  tbl2xts::tbl_xts(., cols_to_xts = close, spread_by = symbol)
+
+# ADVANCED CHART  #############################################################
+chart_symbol <- function(sym, fast_n = 50, slow_n = 200) {
+  if (!require(highcharter)) {
+    
+    stop("please load highcharter to use this function")
+    
+  } else {
+    x <- eval(rlang::parse_expr(sym))
+    highchart(type = "stock") %>% 
+      hc_yAxis_multiples(create_yaxis(3, height = c(2, 1, 1), turnopposite = TRUE)) %>% 
+      hc_add_series(x, yAxis = 0, name = sym) %>% 
+      hc_add_series(EMA(Cl(x), fast_n), yAxis = 0, name = "Fast EMA") %>% 
+      hc_add_series(EMA(Cl(x), slow_n), yAxis = 0, name = "Slow EMA") %>% 
+      hc_add_series(x[, 5], color = "gray", yAxis = 1, name = "Volume", type = "column") %>% 
+      hc_add_series(RSI(Cl(x)), yAxis = 2, name = "Osciallator", 
+                    color = hex_to_rgba("green", 0.7)) %>%
+      hc_add_series(xts(rep(70, NROW(x)), index(x)), 
+                    color = hex_to_rgba("red", 0.7), yAxis = 2, name = "Sell level") %>% 
+      hc_add_series(xts(rep(30, NROW(x)), index(x)), 
+                    color = hex_to_rgba("blue", 0.7), yAxis = 2, name = "Buy level") %>% 
+      hc_tooltip(valueDecimals = 2)
+  }
+}
