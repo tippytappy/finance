@@ -19,7 +19,7 @@ get_screener_symbols <- function(screen_num = 12, num_records = 200, ...) {
                          '?offset=0&count=',
                          num_records)
   cat(paste0('getting symbols from \n', screener_url))
-  read_html(screener_url) %>% 
+  xml2::read_html(screener_url) %>% 
     rvest::html_nodes('.simpTblRow') %>% 
     rvest::html_nodes("a") %>% 
     rvest::html_text()
@@ -118,3 +118,26 @@ chart_symbol <- function(sym, fast_n = 50, slow_n = 200) {
       hc_tooltip(valueDecimals = 2)
   }
 }
+
+# GET ETF INFORMATION FROM YAHOO  #############################################
+get_etf_info <- function(x) {
+  cat(paste('getting', x, '\n'))
+  u1 <- 'https://finance.yahoo.com/quote/'
+  u2 <- '?p='
+  u3 <- '&.tsrc=fin-srch'
+  u <- paste0(u1, x, u2, x, u3)
+  y <- u %>% 
+    read_html() %>% 
+    html_nodes("#quote-summary") %>% 
+    html_nodes("table") %>% 
+    html_table()
+  y <- y[[2]][1:7, ]
+  y <- y %>% 
+    dplyr::mutate(X2 = sub('B|M|%|N/A', '', X2),
+                  X2 = as.numeric(X2)) %>% 
+    tidyr::spread(X1, X2)
+  cbind(sym = x, y)
+}
+
+# takes a symbol as a string
+# returns a data frame
